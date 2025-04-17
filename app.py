@@ -3,21 +3,14 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import io
 import re
-import requests
-
-# Configuración Whapi
-WHAPI_API_URL = "https://gate.whapi.cloud"
-WHAPI_TOKEN = "FSmlOAHXvSpOgseXCPcdGnFeu5Xnp6ew"
 
 app = Flask(__name__)
 
-# Estado global
 usuario_estado = {
     "esperando_carga": False,
     "precios": []
 }
 
-# Función para extraer productos desde texto
 def extraer_productos(mensaje):
     productos = []
     lineas = mensaje.strip().split("\n")
@@ -32,7 +25,6 @@ def extraer_productos(mensaje):
             })
     return productos
 
-# Función para generar resumen tipo PDF en texto
 def generar_pdf_comparativo(lista_precios):
     buffer = io.StringIO()
     df = pd.DataFrame(lista_precios)
@@ -44,42 +36,35 @@ def generar_pdf_comparativo(lista_precios):
     buffer.seek(0)
     return buffer
 
-# Función para enviar mensaje por Whapi
 def enviar_respuesta(telefono, texto):
+    url = "https://gate.whapi.cloud/sendText"
+    headers = {
+        "Authorization": "Bearer FSmlOAHXvSpOgseXCPcdGnFeu5Xnp6ew",
+        "Content-Type": "application/json"
+    }
+    json_data = {
+        "to": telefono,
+        "text": texto
+    }
     try:
-        response = requests.post(f"{WHAPI_API_URL}/sendText", headers={
-            "Authorization": f"Bearer {WHAPI_TOKEN}",
-            "Content-Type": "application/json"
-        }, json={
-            "to": telefono,
-            "text": texto
-        })
-        if response.status_code != 200:
-            print(f"❌ Error al enviar respuesta: {response.text}")
-        else:
-            print(f"✅ Respuesta enviada a {telefono}: {texto}")
+        response = requests.post(url, headers=headers, json=json_data)
+        print(">> Enviando respuesta:", response.text)
     except Exception as e:
-        print(f"❌ Error en enviar_respuesta: {e}")
+        print(f"Error al enviar respuesta: {e}")
 
-# Ruta principal que escucha Webhooks
 @app.route("/", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    print("📩 Mensaje recibido:", data)
+    data = request.json
+    mensaje = data.get("text", "")
+    telefono = data.get("from", "")
 
-    mensaje = data.get("text", "").strip()
-    telefono = data.get("from", "").strip()
+    print(f">>> Mensaje recibido: {mensaje} de {telefono}")
 
-    if not mensaje or not telefono:
-        return jsonify({"status": "ignored"}), 200
-
-    mensaje_lower = mensaje.lower()
-
-    if mensaje_lower == "si":
+    if mensaje.lower().strip() == "si":
         usuario_estado["esperando_carga"] = True
         usuario_estado["precios"] = []
         respuesta = "Perfecto, enviame todos los precios y proveedores que desees que controle. Cuando termines, respondé con 'Listo'."
-    elif mensaje_lower == "listo":
+    elif mensaje.lower().strip() == "listo":
         buffer = generar_pdf_comparativo(usuario_estado["precios"])
         usuario_estado["esperando_carga"] = False
         usuario_estado["precios"] = []
@@ -93,12 +78,9 @@ def webhook():
             respuesta = "Formato no reconocido. Por favor enviá: Producto - Presentación - $Precio"
 
     enviar_respuesta(telefono, respuesta)
-    return jsonify({"status": "ok"}), 200
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
-    app.run(host="0.0.0.0", port=port)
-
 
