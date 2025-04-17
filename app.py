@@ -77,7 +77,6 @@ def whatsapp_bot():
         usuario_estado["precios"] = []
         mensaje_final = resp.message("Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + buffer.getvalue())
 
-" + buffer.getvalue())
     else:
         productos = extraer_productos(mensaje)
         if productos:
