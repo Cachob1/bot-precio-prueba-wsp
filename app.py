@@ -75,7 +75,7 @@ def whatsapp_bot():
         buffer = generar_pdf_comparativo(usuario_estado["precios"])
         usuario_estado["esperando_carga"] = False
         usuario_estado["precios"] = []
-        mensaje_final = resp.message("Análisis finalizado. Aquí tenés el resumen de precios:
+        mensaje_final = resp.message("Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + buffer.getvalue())
 
 " + buffer.getvalue())
     else:
