@@ -3,6 +3,7 @@ from flask import Flask, request, jsonify
 import pandas as pd
 import io
 import re
+import requests
 
 app = Flask(__name__)
 
@@ -55,10 +56,15 @@ def enviar_respuesta(telefono, texto):
 @app.route("/", methods=["POST"])
 def webhook():
     data = request.json
+
+    print(">>> 📥 POST recibido desde Whapi")
+    print(data)
+
     mensaje = data.get("text", "")
     telefono = data.get("from", "")
 
-    print(f">>> Mensaje recibido: {mensaje} de {telefono}")
+    print(f">>> Mensaje recibido: {mensaje}")
+    print(f">>> Enviado por: {telefono}")
 
     if mensaje.lower().strip() == "si":
         usuario_estado["esperando_carga"] = True
@@ -83,4 +89,3 @@ def webhook():
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
-
