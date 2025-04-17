@@ -1,92 +1,90 @@
 import os
-from flask import Flask, request
-from twilio.twiml.messaging_response import MessagingResponse
+from flask import Flask, request, jsonify
 import pandas as pd
 import io
 import re
 from difflib import get_close_matches
+import requests
 
 app = Flask(__name__)
+
+WHAPI_TOKEN = os.getenv("WHAPI_TOKEN")
+WHAPI_URL = "https://gate.whapi.cloud/messages/text"
 
 usuario_estado = {
     "esperando_carga": False,
     "precios": []
 }
 
-nombres_referencia = ["Coca Cola 1.5L", "Quilmes 1L", "Sprite 1.5L"]
-
-def normalizar_producto(nombre):
-    coincidencias = get_close_matches(nombre, nombres_referencia, n=1, cutoff=0.6)
-    return coincidencias[0] if coincidencias else nombre
-
-def calcular_precio_unitario(precio_total, descripcion):
-    match = re.search(r"x(\d+)", descripcion.lower())
-    if match:
-        cantidad = int(match.group(1))
-        return round(precio_total / cantidad, 2)
-    return precio_total
-
 def extraer_productos(texto):
-    lineas = texto.split('\n')
-    resultados = []
+    productos = []
+    lineas = texto.split("\n")
     for linea in lineas:
-        match = re.match(r"(.*?)-(.*?)-\$?(\d+[.,]?\d*)", linea)
-        if match:
-            producto_raw = match.group(1).strip()
-            unidad = match.group(2).strip()
-            precio = float(match.group(3).replace(",", "."))
-            producto = normalizar_producto(producto_raw)
-            precio_unitario = calcular_precio_unitario(precio, unidad)
-            resultados.append({
-                "Producto": producto,
-                "Unidad": "1 ud",
-                "Precio": precio_unitario,
-                "Descripcion": unidad
-            })
-    return resultados
+        partes = re.split(r"\s*-\s*", linea)
+        if len(partes) == 3:
+            producto, presentacion, precio = partes
+            precio = re.sub(r"[^\d.,]", "", precio).replace(",", ".")
+            try:
+                precio_float = float(precio)
+                productos.append({
+                    "Producto": producto.strip(),
+                    "Presentación": presentacion.strip(),
+                    "Precio": precio_float
+                })
+            except:
+                continue
+    return productos
 
 def generar_pdf_comparativo(productos):
     df = pd.DataFrame(productos)
-    resumen = df.groupby("Producto").agg({"Precio": ["min", "mean"]})
-    resumen.columns = ["Precio más bajo", "Promedio"]
-    resumen = resumen.reset_index()
-    resumen["Ahorro vs promedio"] = resumen["Promedio"] - resumen["Precio más bajo"]
-    resumen["% más barato"] = 100 * (1 - resumen["Precio más bajo"] / resumen["Promedio"])
-    resumen["Unidad"] = "1 ud"
-    resultado = resumen[["Producto", "Unidad", "Precio más bajo", "Ahorro vs promedio", "% más barato"]]
-    buffer = io.StringIO()
-    resultado.to_string(buf=buffer, index=False)
+    buffer = io.BytesIO()
+    df.to_string(buf := io.StringIO(), index=False)
+    buffer.write(buf.getvalue().encode("utf-8"))
     buffer.seek(0)
     return buffer
 
-@app.route("/wsp", methods=["POST"])
-def whatsapp_bot():
-    mensaje = request.form.get("Body")
-    resp = MessagingResponse()
+def enviar_mensaje(numero, texto):
+    headers = {
+        "Authorization": f"Bearer {WHAPI_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "to": numero,
+        "text": texto
+    }
+    response = requests.post(WHAPI_URL, headers=headers, json=payload)
+    return response.status_code
 
-    if not usuario_estado["esperando_carga"]:
-        if mensaje.lower().strip() == "si":
-            usuario_estado["esperando_carga"] = True
-            usuario_estado["precios"] = []
-            resp.message("Perfecto, enviame todos los precios y proveedores que desees que controle. Cuando termines, respondé con 'Listo'.")
-        else:
-            resp.message("Estoy aquí para ayudarte. Si ya tenés todos los precios de tus proveedores respondé: 'Si'")
-    elif mensaje.lower().strip() == "listo":
+@app.route("/webhook", methods=["POST"])
+def webhook():
+    data = request.get_json()
+    numero = data.get("phone")
+    mensaje = data.get("message", "").strip().lower()
+
+    if not numero or not mensaje:
+        return jsonify({"error": "Falta número o mensaje"}), 400
+
+    if mensaje == "si":
+        usuario_estado["esperando_carga"] = True
+        usuario_estado["precios"] = []
+        enviar_mensaje(numero, "Perfecto, enviame todos los precios y proveedores que desees que controle. Cuando termines, respondé con 'Listo'.")
+    elif mensaje == "listo":
         buffer = generar_pdf_comparativo(usuario_estado["precios"])
         usuario_estado["esperando_carga"] = False
         usuario_estado["precios"] = []
-        mensaje_final = resp.message("Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + buffer.getvalue())
-
+        resumen = buffer.getvalue().decode("utf-8")
+        enviar_mensaje(numero, "Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + resumen)
     else:
         productos = extraer_productos(mensaje)
         if productos:
             usuario_estado["precios"].extend(productos)
-            resp.message(f"Productos cargados: {len(productos)}")
+            enviar_mensaje(numero, f"Productos cargados: {len(productos)}")
         else:
-            resp.message("Formato no reconocido. Por favor enviá: Producto - Presentación - $Precio")
+            enviar_mensaje(numero, "Estoy aquí para ayudarte. Si ya tenés todos los precios respondé: 'Si'. O bien, mandá productos con el formato: Producto - Presentación - $Precio")
 
-    return str(resp)
+    return jsonify({"status": "ok"})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))  # Render define PORT automáticamente
+    port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
