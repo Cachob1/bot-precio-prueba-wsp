@@ -64,13 +64,14 @@ def obtener_mensajes():
 # Función para enviar respuesta por Whapi
 def enviar_respuesta(telefono, texto):
     try:
-        requests.post(f"{WHAPI_API_URL}/sendText", headers={
+        r = requests.post(f"{WHAPI_API_URL}/sendText", headers={
             "Authorization": f"Bearer {WHAPI_TOKEN}",
             "Content-Type": "application/json"
         }, json={
             "to": telefono,
             "text": texto
         })
+        print(f">>> Respuesta del POST: {r.status_code} {r.text}")
     except Exception as e:
         print(f"Error al enviar respuesta: {e}")
 
@@ -94,13 +95,14 @@ def procesar_mensaje(mensaje, telefono):
         else:
             return "Formato no reconocido. Por favor enviá: Producto - Presentación - $Precio"
 
-# Tarea en bucle que consulta cada 10 segundos
+# Endpoint para ver si el bot está vivo
 @app.route("/")
 def start_polling():
     return "Bot activo y funcionando con Whapi."
 
+# Bucle que escucha y responde
 def loop():
-    print("Iniciando bucle de escucha...")
+    print(">>> Iniciando bucle de escucha...")
     mensajes_procesados = set()
     while True:
         mensajes = obtener_mensajes()
@@ -111,11 +113,15 @@ def loop():
 
             texto = mensaje.get("text", "")
             telefono = mensaje.get("from", "")
+            print(f">>> Mensaje recibido: {texto} de {telefono}")
+
             respuesta = procesar_mensaje(texto, telefono)
             enviar_respuesta(telefono, respuesta)
+
             mensajes_procesados.add(id_msg)
         time.sleep(10)
 
+# Inicia servidor y bucle
 if __name__ == "__main__":
     from threading import Thread
     thread = Thread(target=loop)
@@ -124,3 +130,4 @@ if __name__ == "__main__":
 
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
+
