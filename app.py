@@ -4,87 +4,72 @@ import pandas as pd
 import io
 import re
 from difflib import get_close_matches
-import requests
 
 app = Flask(__name__)
-
-WHAPI_TOKEN = os.getenv("WHAPI_TOKEN")
-WHAPI_URL = "https://gate.whapi.cloud/messages/text"
 
 usuario_estado = {
     "esperando_carga": False,
     "precios": []
 }
 
-def extraer_productos(texto):
+# Función para extraer datos del mensaje
+def extraer_productos(mensaje):
     productos = []
-    lineas = texto.split("\n")
+    lineas = mensaje.strip().split("\n")
     for linea in lineas:
-        partes = re.split(r"\s*-\s*", linea)
-        if len(partes) == 3:
-            producto, presentacion, precio = partes
-            precio = re.sub(r"[^\d.,]", "", precio).replace(",", ".")
-            try:
-                precio_float = float(precio)
-                productos.append({
-                    "Producto": producto.strip(),
-                    "Presentación": presentacion.strip(),
-                    "Precio": precio_float
-                })
-            except:
-                continue
+        match = re.match(r"(.*?)-(.*?)-\$(\d+)", linea.strip())
+        if match:
+            producto, presentacion, precio = match.groups()
+            productos.append({
+                "Producto": producto.strip(),
+                "Presentación": presentacion.strip(),
+                "Precio": float(precio.strip())
+            })
     return productos
 
-def generar_pdf_comparativo(productos):
-    df = pd.DataFrame(productos)
-    buffer = io.BytesIO()
-    df.to_string(buf := io.StringIO(), index=False)
-    buffer.write(buf.getvalue().encode("utf-8"))
+# Función para generar PDF desde los datos
+def generar_pdf_comparativo(lista_precios):
+    buffer = io.StringIO()
+    df = pd.DataFrame(lista_precios)
+    if df.empty:
+        buffer.write("No se encontraron productos.")
+    else:
+        resumen = df.groupby("Producto").agg({"Precio": ["min", "max", "mean"]})
+        buffer.write(resumen.to_string())
     buffer.seek(0)
     return buffer
 
-def enviar_mensaje(numero, texto):
-    headers = {
-        "Authorization": f"Bearer {WHAPI_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "to": numero,
-        "text": texto
-    }
-    response = requests.post(WHAPI_URL, headers=headers, json=payload)
-    return response.status_code
-
-@app.route("/webhook", methods=["POST"])
+@app.route("/", methods=["POST"])
 def webhook():
-    data = request.get_json()
-    numero = data.get("phone")
-    mensaje = data.get("message", "").strip().lower()
+    data = request.json
+    mensaje = data.get("text", "")
+    telefono = data.get("from", "")
 
-    if not numero or not mensaje:
-        return jsonify({"error": "Falta número o mensaje"}), 400
+    respuesta = ""
 
-    if mensaje == "si":
+    if mensaje.lower().strip() == "si":
         usuario_estado["esperando_carga"] = True
         usuario_estado["precios"] = []
-        enviar_mensaje(numero, "Perfecto, enviame todos los precios y proveedores que desees que controle. Cuando termines, respondé con 'Listo'.")
-    elif mensaje == "listo":
+        respuesta = "Perfecto, enviame todos los precios y proveedores que desees que controle. Cuando termines, respondé con 'Listo'."
+    elif mensaje.lower().strip() == "listo":
         buffer = generar_pdf_comparativo(usuario_estado["precios"])
         usuario_estado["esperando_carga"] = False
         usuario_estado["precios"] = []
-        resumen = buffer.getvalue().decode("utf-8")
-        enviar_mensaje(numero, "Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + resumen)
+        respuesta = "Análisis finalizado. Aquí tenés el resumen de precios:\n\n" + buffer.getvalue()
     else:
         productos = extraer_productos(mensaje)
         if productos:
             usuario_estado["precios"].extend(productos)
-            enviar_mensaje(numero, f"Productos cargados: {len(productos)}")
+            respuesta = f"Productos cargados: {len(productos)}"
         else:
-            enviar_mensaje(numero, "Estoy aquí para ayudarte. Si ya tenés todos los precios respondé: 'Si'. O bien, mandá productos con el formato: Producto - Presentación - $Precio")
+            respuesta = "Formato no reconocido. Por favor enviá: Producto - Presentación - $Precio"
 
-    return jsonify({"status": "ok"})
+    return jsonify({"to": telefono, "text": respuesta})
 
 if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 10000))
+    app.run(host="0.0.0.0", port=port)
+
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
 
